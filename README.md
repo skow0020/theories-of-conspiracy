@@ -1,36 +1,109 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Theories of Conspiracy
 
-## Getting Started
+A multiplayer party game where one player acts as the judge, everyone else invents a funny conspiracy theory about a given topic, and the judge picks their favorite.
 
-First, run the development server:
+This app is built with Next.js, React, and Socket.IO for real-time multiplayer rooms.
+
+## Requirements
+
+- Node.js 18+
+- npm
+- ngrok (optional, for testing from a phone or other device)
+
+## Local development
+
+Install dependencies:
+
+```bash
+npm install
+```
+
+Start the app:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Then open:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- http://localhost:3000
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The app uses a custom Node server so the Socket.IO multiplayer room system works correctly.
 
-## Learn More
+## Production mode
 
-To learn more about Next.js, take a look at the following resources:
+Build the app:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm run build
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Start the production server:
 
-## Deploy on Vercel
+```bash
+npm run start
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+This runs the app in production mode through the custom server.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Using ngrok for remote testing
+
+If you want to test the app from a phone or another device, tunnel your local app through ngrok.
+
+1. Start the app locally:
+
+```bash
+npm run dev
+```
+
+2. In a second terminal, run:
+
+```bash
+ngrok http 3000
+```
+
+3. Copy the HTTPS forwarding URL from ngrok, for example:
+
+```bash
+https://8504-24-152-148-2.ngrok-free.app
+```
+
+4. Open that URL in the browser or on your phone.
+
+5. If you want to override the socket URL manually, set:
+
+```bash
+NEXT_PUBLIC_SOCKET_URL=https://your-ngrok-url
+```
+
+The app also defaults to the current window origin when running from an ngrok host, so it will follow the active tunnel automatically after the URL changes.
+
+## Important note about ngrok and dev mode
+
+The local dev server needs to allow the tunnel origin in development. The project already includes ngrok origins in the Next.js config, including:
+
+- localhost
+- 127.0.0.1
+- 0.0.0.0
+- *.ngrok-free.app
+- *.ngrok.app
+
+If ngrok changes its URL, you usually only need to reopen the tunnel and load the new public URL. No code change is needed unless you want to force a specific socket URL with an environment variable.
+
+## Common workflow
+
+- Local play: http://localhost:3000
+- Remote play: your ngrok HTTPS URL
+- Build check: npm run build
+- Restart dev server if the port is stuck: Ctrl+C and run npm run dev again
+
+## Game flow
+
+- Create or join a room
+- Pick a topic
+- Submit a conspiracy theory
+- Judge reviews theories anonymously
+- Cast a vote
+- Advance to the next round
+
+The judge vote phase keeps theory submissions hidden to reduce bias during judging.
