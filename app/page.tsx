@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 
-type Phase = "home" | "lobby" | "topic" | "writing" | "voting" | "results";
+type Phase = "home" | "lobby" | "topic" | "writing" | "voting" | "results" | "game-over";
 
 type Player = {
   id: string;
@@ -30,6 +30,7 @@ type RoomState = {
   theories: TheoryCard[];
   phase: Phase;
   winner: string | null;
+  isTie?: boolean;
   voteTimer: number;
 };
 
@@ -88,6 +89,7 @@ export default function Home() {
   const [theories, setTheories] = useState<TheoryCard[]>([]);
   const [submittedText, setSubmittedText] = useState("");
   const [winner, setWinner] = useState<string | null>(null);
+  const [isTie, setIsTie] = useState(false);
   const [copied, setCopied] = useState(false);
   const [voteTimer, setVoteTimer] = useState(20);
   const [isConnected, setIsConnected] = useState(false);
@@ -141,6 +143,7 @@ export default function Home() {
       setTopic(state.topic || "");
       setTheories(state.theories || []);
       setWinner(state.winner || null);
+      setIsTie(Boolean(state.isTie));
       setVoteTimer(state.voteTimer ?? 20);
 
       const currentName = state.players.find((player) => player.id === socket.id)?.name || nickname;
@@ -180,6 +183,7 @@ export default function Home() {
       setTopic(response.topic || "");
       setTheories(response.theories || []);
       setWinner(response.winner || null);
+      setIsTie(Boolean(response.isTie));
       setVoteTimer(response.voteTimer ?? 20);
       setSubmittedText("");
       setHasSubmittedTheory(false);
@@ -263,6 +267,15 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#0f1021] px-4 py-6 text-white">
       <div className="mx-auto max-w-md">
+        {phase !== "home" && phase !== "lobby" && (
+          <div className="mb-4 rounded-[28px] border border-cyan-400/20 bg-slate-900/70 p-4 shadow-xl shadow-cyan-500/10">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs uppercase tracking-[0.2em] text-cyan-300">Room code</span>
+              <span className="rounded-full border border-cyan-400/40 bg-cyan-500/10 px-2 py-1 text-sm font-bold text-cyan-100">{roomCode}</span>
+            </div>
+          </div>
+        )}
+
         {phase === "home" && (
           <section className="rounded-[28px] border border-white/10 bg-white/5 p-6 shadow-2xl shadow-cyan-500/10 backdrop-blur-xl">
             <div className="mb-6 inline-flex rounded-full border border-cyan-400/40 bg-cyan-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200">
@@ -571,7 +584,11 @@ export default function Home() {
 
               <p className="mt-4 text-xs uppercase tracking-[0.18em] text-slate-400">Round summary</p>
               <div className="mt-3 rounded-xl bg-emerald-500/10 px-3 py-3 text-sm text-emerald-100">
-                {winner ? `The theory from ${winner} takes the round and earns a point.` : "No theory received votes this round."}
+                {isTie
+                  ? "It’s a tie! No one gets a point."
+                  : winner
+                    ? `The theory from ${winner} takes the round and earns a point.`
+                    : "No theory received votes this round."}
               </div>
 
               <p className="mt-4 text-xs uppercase tracking-[0.18em] text-slate-400">Leaderboard</p>
@@ -596,8 +613,41 @@ export default function Home() {
               onClick={nextRound}
               className="w-full rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 px-4 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isTopicChooser ? "Next round" : "Waiting for topic chooser"}
+              {isTopicChooser ? (round >= 10 ? "Finish game" : "Next round") : "Waiting for topic chooser"}
             </button>
+          </section>
+        )}
+
+        {phase === "game-over" && (
+          <section className="space-y-4 rounded-[28px] border border-white/10 bg-white/5 p-6 backdrop-blur-xl">
+            <div className="rounded-[28px] border border-amber-400/30 bg-amber-500/10 p-4 text-center">
+              <p className="text-xs uppercase tracking-[0.22em] text-amber-200">Final round</p>
+              <h2 className="mt-3 text-4xl font-black text-white">Quit milk mixin</h2>
+              <p className="mt-2 text-sm text-amber-100">go outside you filthy animals</p>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-slate-950/30 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Room code</p>
+              <div className="mt-2 flex items-center justify-center rounded-full border border-cyan-400/40 bg-cyan-500/10 px-3 py-2 text-sm font-bold text-cyan-100">{roomCode}</div>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-slate-950/30 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Leaderboard</p>
+              <div className="mt-3 space-y-2">
+                {players
+                  .slice()
+                  .sort((a, b) => b.score - a.score)
+                  .map((player) => (
+                    <div key={player.id} className="flex items-center justify-between rounded-xl bg-white/5 px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <span>{player.badge}</span>
+                        <span className="font-medium text-white">{player.name}</span>
+                      </div>
+                      <span className="text-sm font-bold text-cyan-200">{player.score}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
           </section>
         )}
       </div>

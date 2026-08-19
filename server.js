@@ -40,12 +40,14 @@ function clearVoteTimer(room) {
 function getRoomWinner(room) {
   if (!room.theories.length) return null;
 
-  return room.theories.reduce((best, current) => {
-    if (!best || current.votes > best.votes) {
-      return current;
-    }
-    return best;
-  }, null);
+  const topVotes = Math.max(...room.theories.map((theory) => theory.votes || 0));
+  const topTheories = room.theories.filter((theory) => (theory.votes || 0) === topVotes);
+
+  if (topTheories.length > 1) {
+    return { isTie: true, theory: null };
+  }
+
+  return { isTie: false, theory: topTheories[0] || null };
 }
 
 function broadcastRoomState(io, roomCode) {
@@ -61,6 +63,7 @@ function broadcastRoomState(io, roomCode) {
     theories: room.theories,
     phase: room.phase,
     winner: room.winner,
+    isTie: Boolean(room.isTie),
     voteTimer: room.voteTimer,
   });
 }
@@ -72,12 +75,13 @@ function finalizeRound(io, roomCode) {
   clearVoteTimer(room);
   room.voteTimer = 0;
 
-  const winningTheory = getRoomWinner(room);
+  const winnerState = getRoomWinner(room);
   room.phase = 'results';
-  room.winner = winningTheory ? winningTheory.author : null;
+  room.isTie = Boolean(winnerState && winnerState.isTie);
+  room.winner = winnerState && !winnerState.isTie ? winnerState.theory.author : (winnerState && winnerState.isTie ? 'Tie!' : null);
 
-  if (winningTheory) {
-    const winnerPlayer = room.players.find((player) => player.name === winningTheory.author);
+  if (winnerState && !winnerState.isTie && winnerState.theory) {
+    const winnerPlayer = room.players.find((player) => player.name === winnerState.theory.author);
     if (winnerPlayer) winnerPlayer.score += 1;
   }
 
@@ -117,6 +121,7 @@ function createRoomData(code) {
     theories: [],
     phase: 'lobby',
     winner: null,
+    isTie: false,
     voteTimer: 20,
     voteTimerInterval: null,
     votesByPlayer: new Map(),
@@ -165,6 +170,7 @@ app.prepare().then(() => {
         theories: room.theories,
         phase: room.phase,
         winner: room.winner,
+        isTie: Boolean(room.isTie),
         voteTimer: room.voteTimer,
       };
 
@@ -207,6 +213,7 @@ app.prepare().then(() => {
         theories: room.theories,
         phase: room.phase,
         winner: room.winner,
+        isTie: Boolean(room.isTie),
         voteTimer: room.voteTimer,
       };
 
@@ -224,6 +231,7 @@ app.prepare().then(() => {
       room.phase = 'topic';
       room.theories = [];
       room.winner = null;
+      room.isTie = false;
       room.topic = '';
       room.votesByPlayer = new Map();
       room.submittedBy = [];
@@ -240,6 +248,7 @@ app.prepare().then(() => {
 
       room.topic = topic;
       room.phase = 'writing';
+      room.isTie = false;
       room.votesByPlayer = new Map();
       room.submittedBy = [];
       room.voteTimer = 20;
@@ -302,12 +311,27 @@ app.prepare().then(() => {
       const chooserId = room.players[room.chooserIndex]?.id;
       if (socket.id !== chooserId) return;
 
+      if (room.round >= 3) {
+        room.phase = 'game-over';
+        room.topic = '';
+        room.theories = [];
+        room.winner = null;
+        room.isTie = false;
+        room.voteTimer = 0;
+        room.votesByPlayer = new Map();
+        room.submittedBy = [];
+        clearVoteTimer(room);
+        broadcastRoomState(io, roomCode);
+        return;
+      }
+
       room.chooserIndex = (room.chooserIndex + 1) % Math.max(room.players.length, 1);
       room.round += 1;
       room.phase = 'topic';
       room.topic = '';
       room.theories = [];
       room.winner = null;
+      room.isTie = false;
       room.voteTimer = 20;
       room.votesByPlayer = new Map();
       room.submittedBy = [];
