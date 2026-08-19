@@ -6,7 +6,8 @@
     "dev": "(command -v fuser >/dev/null 2>&1 && fuser -k 3000/tcp || command -v lsof >/dev/null 2>&1 && lsof -ti :3000 | xargs -r kill -9 || true) && node server.js",
     "build": "next build",
     "start": "NODE_ENV=production node server.js",
-    "lint": "eslint"
+    "lint": "eslint",
+    "serve:ngrok": "./start-public.sh"
   },
   "dependencies": {
     "next": "16.3.0",
