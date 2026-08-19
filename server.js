@@ -11,15 +11,22 @@ const handle = app.getRequestHandler();
 
 const rooms = new Map();
 
+function normalizeRoomCode(code) {
+  const normalized = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').trim();
+  if (!normalized) return '';
+  const compact = normalized.replace(/^CON/, '').slice(0, 6);
+  return `CON-${compact}`;
+}
+
 function generateRoomCode() {
   const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
   const digits = '23456789';
-  let code = 'CON-';
-  for (let i = 0; i < 4; i += 1) {
-    const chars = i % 2 === 0 ? letters : digits;
-    code += chars[Math.floor(Math.random() * chars.length)];
+  const chars = [];
+  for (let i = 0; i < 6; i += 1) {
+    const source = i % 2 === 0 ? letters : digits;
+    chars.push(source[Math.floor(Math.random() * source.length)]);
   }
-  return code;
+  return `CON-${chars.join('')}`;
 }
 
 function clearVoteTimer(room) {
@@ -58,6 +65,25 @@ function broadcastRoomState(io, roomCode) {
   });
 }
 
+function finalizeRound(io, roomCode) {
+  const room = rooms.get(roomCode);
+  if (!room) return;
+
+  clearVoteTimer(room);
+  room.voteTimer = 0;
+
+  const winningTheory = getRoomWinner(room);
+  room.phase = 'results';
+  room.winner = winningTheory ? winningTheory.author : null;
+
+  if (winningTheory) {
+    const winnerPlayer = room.players.find((player) => player.name === winningTheory.author);
+    if (winnerPlayer) winnerPlayer.score += 1;
+  }
+
+  broadcastRoomState(io, roomCode);
+}
+
 function startVoteTimer(io, roomCode) {
   const room = rooms.get(roomCode);
   if (!room) return;
@@ -73,17 +99,8 @@ function startVoteTimer(io, roomCode) {
 
     currentRoom.voteTimer -= 1;
     if (currentRoom.voteTimer <= 0) {
-      currentRoom.voteTimer = 0;
-      const winningTheory = getRoomWinner(currentRoom);
-      currentRoom.phase = 'results';
-      currentRoom.winner = winningTheory ? winningTheory.author : null;
-
-      if (winningTheory) {
-        const winnerPlayer = currentRoom.players.find((player) => player.name === winningTheory.author);
-        if (winnerPlayer) winnerPlayer.score += 1;
-      }
-
-      clearVoteTimer(currentRoom);
+      finalizeRound(io, roomCode);
+      return;
     }
 
     broadcastRoomState(io, roomCode);
@@ -108,7 +125,7 @@ function createRoomData(code) {
 }
 
 function getRoom(code) {
-  const normalized = code.toUpperCase();
+  const normalized = normalizeRoomCode(code);
   if (!rooms.has(normalized)) {
     rooms.set(normalized, createRoomData(normalized));
   }
@@ -126,7 +143,7 @@ app.prepare().then(() => {
 
   io.on('connection', (socket) => {
     socket.on('create-room', ({ nickname }, callback) => {
-      const code = generateRoomCode();
+      const code = normalizeRoomCode(generateRoomCode());
       const room = getRoom(code);
       const player = {
         id: socket.id,
@@ -156,7 +173,7 @@ app.prepare().then(() => {
     });
 
     socket.on('join-room', ({ roomCode, nickname }, callback) => {
-      const code = (roomCode || '').toUpperCase();
+      const code = normalizeRoomCode(roomCode);
       if (!code) return;
 
       const room = rooms.get(code);
@@ -198,7 +215,8 @@ app.prepare().then(() => {
     });
 
     socket.on('start-round', ({ roomCode }) => {
-      const room = getRoom(roomCode);
+      const normalizedRoomCode = normalizeRoomCode(roomCode);
+      const room = getRoom(normalizedRoomCode);
       const chooserId = room.players[room.chooserIndex]?.id;
       if (socket.id !== chooserId) return;
       if (room.players.length < 2) return;
@@ -215,7 +233,8 @@ app.prepare().then(() => {
     });
 
     socket.on('set-topic', ({ roomCode, topic }) => {
-      const room = getRoom(roomCode);
+      const normalizedRoomCode = normalizeRoomCode(roomCode);
+      const room = getRoom(normalizedRoomCode);
       const chooserId = room.players[room.chooserIndex]?.id;
       if (socket.id !== chooserId) return;
 
@@ -228,7 +247,8 @@ app.prepare().then(() => {
     });
 
     socket.on('submit-theory', ({ roomCode, theoryText, authorName }) => {
-      const room = getRoom(roomCode);
+      const normalizedRoomCode = normalizeRoomCode(roomCode);
+      const room = getRoom(normalizedRoomCode);
       const author = authorName?.trim() || 'Guest';
 
       if (room.phase !== 'writing') return;
@@ -255,7 +275,8 @@ app.prepare().then(() => {
     });
 
     socket.on('cast-vote', ({ roomCode, theoryId }) => {
-      const room = getRoom(roomCode);
+      const normalizedRoomCode = normalizeRoomCode(roomCode);
+      const room = getRoom(normalizedRoomCode);
       if (room.phase !== 'voting') return;
       if (room.votesByPlayer.has(socket.id)) return;
 
@@ -266,11 +287,18 @@ app.prepare().then(() => {
       selected.votes = (selected.votes || 0) + 1;
       selected.voters = Array.from(new Set([...(selected.voters || []), voterName]));
       room.votesByPlayer.set(socket.id, theoryId);
+
+      if (room.votesByPlayer.size >= room.players.length) {
+        finalizeRound(io, roomCode);
+        return;
+      }
+
       broadcastRoomState(io, roomCode);
     });
 
     socket.on('next-round', ({ roomCode }) => {
-      const room = getRoom(roomCode);
+      const normalizedRoomCode = normalizeRoomCode(roomCode);
+      const room = getRoom(normalizedRoomCode);
       const chooserId = room.players[room.chooserIndex]?.id;
       if (socket.id !== chooserId) return;
 

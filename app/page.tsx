@@ -46,6 +46,13 @@ const topicBank = [
   "The city fountain only starts working when the mayor tells a lie at dinner",
 ];
 
+const normalizeRoomCode = (value: string) => {
+  const normalized = value.toUpperCase().replace(/[^A-Z0-9]/g, "").trim();
+  if (!normalized) return "";
+  const compact = normalized.replace(/^CON/, "").slice(0, 6);
+  return `CON-${compact}`;
+};
+
 const generateRoomCode = () => {
   const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
   const digits = "23456789";
@@ -68,6 +75,8 @@ const shuffleTopics = () => {
 
 export default function Home() {
   const socketRef = useRef<Socket | null>(null);
+  const phaseRef = useRef<Phase>("home");
+  const roomCodeRef = useRef("");
   const [phase, setPhase] = useState<Phase>("home");
   const [roomCode, setRoomCode] = useState("");
   const [nickname, setNickname] = useState("You");
@@ -87,6 +96,14 @@ export default function Home() {
   const [hasVotedThisRound, setHasVotedThisRound] = useState(false);
   const [joinError, setJoinError] = useState("");
   const [shuffledSuggestions] = useState<string[]>(() => shuffleTopics());
+
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
+  useEffect(() => {
+    roomCodeRef.current = roomCode;
+  }, [roomCode]);
 
   useEffect(() => {
     const socketUrl =
@@ -114,6 +131,7 @@ export default function Home() {
       setIsConnected(false);
       setCurrentPlayerId(null);
     });
+
     socket.on("room-state", (state: RoomState) => {
       setRoomCode((previousCode) => state.code || previousCode || "");
       setPlayers(state.players || []);
@@ -130,7 +148,17 @@ export default function Home() {
       setHasVotedThisRound((state.theories || []).some((theory) => Array.isArray(theory.voters) && theory.voters.includes(currentName)));
     });
 
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (phaseRef.current !== "home" && roomCodeRef.current) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
     return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
       socket.disconnect();
     };
   }, []);
@@ -161,9 +189,10 @@ export default function Home() {
 
   const joinRoom = () => {
     const socket = socketRef.current;
-    if (!socket || !isConnected || !roomCode.trim()) return;
+    const normalizedRoomCode = normalizeRoomCode(roomCode);
+    if (!socket || !isConnected || !normalizedRoomCode) return;
 
-    socket.emit("join-room", { roomCode: roomCode.trim(), nickname: nickname.trim() || "Guest" }, (response: RoomState & { error?: string }) => {
+    socket.emit("join-room", { roomCode: normalizedRoomCode, nickname: nickname.trim() || "Guest" }, (response: RoomState & { error?: string }) => {
       if (response?.error) {
         setJoinError(response.error);
         setPhase("home");
@@ -172,7 +201,7 @@ export default function Home() {
       }
 
       setJoinError("");
-      setRoomCode(response.code || roomCode);
+      setRoomCode(response.code || normalizedRoomCode);
       setPlayers(response.players || []);
       setChooserIndex(response.chooserIndex || 0);
       setRound(response.round || 1);
@@ -262,13 +291,13 @@ export default function Home() {
                 onClick={createRoom}
                 className="rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 px-4 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isConnected ? "Create room" : "Connecting..."}
+                {isConnected ? "New room" : "Connecting..."}
               </button>
               <div className="grid grid-cols-[1fr_auto] gap-2">
                 <input
                   value={roomCode}
                   onChange={(event) => {
-                    setRoomCode(event.target.value.toUpperCase());
+                    setRoomCode(normalizeRoomCode(event.target.value));
                     if (joinError) setJoinError("");
                   }}
                   className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-center text-sm font-semibold tracking-[0.18em] text-cyan-100 uppercase outline-none focus:border-cyan-400"
@@ -279,7 +308,7 @@ export default function Home() {
                   onClick={joinRoom}
                   className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Join
+                  Join room
                 </button>
               </div>
               {joinError && (
