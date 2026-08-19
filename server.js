@@ -23,10 +23,39 @@ function generateRoomCode() {
 }
 
 function clearVoteTimer(room) {
+  if (!room) return;
   if (room.voteTimerInterval) {
     clearInterval(room.voteTimerInterval);
     room.voteTimerInterval = null;
   }
+}
+
+function getRoomWinner(room) {
+  if (!room.theories.length) return null;
+
+  return room.theories.reduce((best, current) => {
+    if (!best || current.votes > best.votes) {
+      return current;
+    }
+    return best;
+  }, null);
+}
+
+function broadcastRoomState(io, roomCode) {
+  const room = rooms.get(roomCode);
+  if (!room) return;
+
+  io.to(roomCode).emit('room-state', {
+    code: room.code,
+    players: room.players,
+    chooserIndex: room.chooserIndex,
+    round: room.round,
+    topic: room.topic,
+    theories: room.theories,
+    phase: room.phase,
+    winner: room.winner,
+    voteTimer: room.voteTimer,
+  });
 }
 
 function startVoteTimer(io, roomCode) {
@@ -45,12 +74,19 @@ function startVoteTimer(io, roomCode) {
     currentRoom.voteTimer -= 1;
     if (currentRoom.voteTimer <= 0) {
       currentRoom.voteTimer = 0;
+      const winningTheory = getRoomWinner(currentRoom);
       currentRoom.phase = 'results';
-      currentRoom.winner = 'The room decided to keep the chaos alive';
+      currentRoom.winner = winningTheory ? winningTheory.author : null;
+
+      if (winningTheory) {
+        const winnerPlayer = currentRoom.players.find((player) => player.name === winningTheory.author);
+        if (winnerPlayer) winnerPlayer.score += 1;
+      }
+
       clearVoteTimer(currentRoom);
     }
 
-    io.to(roomCode).emit('room-state', currentRoom);
+    broadcastRoomState(io, roomCode);
   }, 1000);
 }
 
@@ -58,7 +94,7 @@ function createRoomData(code) {
   return {
     code,
     players: [],
-    judgeIndex: 0,
+    chooserIndex: 0,
     round: 1,
     topic: '',
     theories: [],
@@ -66,6 +102,8 @@ function createRoomData(code) {
     winner: null,
     voteTimer: 20,
     voteTimerInterval: null,
+    votesByPlayer: new Map(),
+    submittedBy: [],
   };
 }
 
@@ -104,7 +142,7 @@ app.prepare().then(() => {
       const payload = {
         code: room.code,
         players: room.players,
-        judgeIndex: room.judgeIndex,
+        chooserIndex: room.chooserIndex,
         round: room.round,
         topic: room.topic,
         theories: room.theories,
@@ -121,7 +159,14 @@ app.prepare().then(() => {
       const code = (roomCode || '').toUpperCase();
       if (!code) return;
 
-      const room = getRoom(code);
+      const room = rooms.get(code);
+      if (!room) {
+        if (typeof callback === 'function') {
+          callback({ error: 'Room does not exist.' });
+        }
+        return;
+      }
+
       const alreadyInRoom = room.players.some((player) => player.id === socket.id);
 
       if (!alreadyInRoom) {
@@ -139,7 +184,7 @@ app.prepare().then(() => {
       const payload = {
         code: room.code,
         players: room.players,
-        judgeIndex: room.judgeIndex,
+        chooserIndex: room.chooserIndex,
         round: room.round,
         topic: room.topic,
         theories: room.theories,
@@ -154,134 +199,92 @@ app.prepare().then(() => {
 
     socket.on('start-round', ({ roomCode }) => {
       const room = getRoom(roomCode);
-      const judgeId = room.players[room.judgeIndex]?.id;
-      if (socket.id !== judgeId) return;
+      const chooserId = room.players[room.chooserIndex]?.id;
+      if (socket.id !== chooserId) return;
+      if (room.players.length < 2) return;
 
       room.phase = 'topic';
       room.theories = [];
       room.winner = null;
       room.topic = '';
+      room.votesByPlayer = new Map();
+      room.submittedBy = [];
+      room.voteTimer = 20;
       clearVoteTimer(room);
-      io.to(roomCode).emit('room-state', {
-        code: room.code,
-        players: room.players,
-        judgeIndex: room.judgeIndex,
-        round: room.round,
-        topic: room.topic,
-        theories: room.theories,
-        phase: room.phase,
-        winner: room.winner,
-        voteTimer: room.voteTimer,
-      });
+      broadcastRoomState(io, roomCode);
     });
 
     socket.on('set-topic', ({ roomCode, topic }) => {
       const room = getRoom(roomCode);
-      const judgeId = room.players[room.judgeIndex]?.id;
-      if (socket.id !== judgeId) return;
+      const chooserId = room.players[room.chooserIndex]?.id;
+      if (socket.id !== chooserId) return;
 
       room.topic = topic;
       room.phase = 'writing';
-      io.to(roomCode).emit('room-state', {
-        code: room.code,
-        players: room.players,
-        judgeIndex: room.judgeIndex,
-        round: room.round,
-        topic: room.topic,
-        theories: room.theories,
-        phase: room.phase,
-        winner: room.winner,
-        voteTimer: room.voteTimer,
-      });
+      room.votesByPlayer = new Map();
+      room.submittedBy = [];
+      room.voteTimer = 20;
+      broadcastRoomState(io, roomCode);
     });
 
     socket.on('submit-theory', ({ roomCode, theoryText, authorName }) => {
       const room = getRoom(roomCode);
-      const judgeId = room.players[room.judgeIndex]?.id;
       const author = authorName?.trim() || 'Guest';
 
       if (room.phase !== 'writing') return;
-      if (socket.id === judgeId) return;
-      if (room.theories.some((theory) => theory.authorId === socket.id)) return;
+      if (room.submittedBy.includes(socket.id)) return;
 
+      room.submittedBy.push(socket.id);
       room.theories.push({
         id: `${Date.now()}-${Math.random()}`,
         authorId: socket.id,
         author,
         text: theoryText,
+        votes: 0,
+        voters: [],
       });
 
-      if (room.theories.length >= Math.max(room.players.length - 1, 1)) {
+      if (room.theories.length >= room.players.length) {
         room.phase = 'voting';
         room.voteTimer = 20;
+        room.votesByPlayer = new Map();
         startVoteTimer(io, room.code);
       }
 
-      io.to(roomCode).emit('room-state', {
-        code: room.code,
-        players: room.players,
-        judgeIndex: room.judgeIndex,
-        round: room.round,
-        topic: room.topic,
-        theories: room.theories,
-        phase: room.phase,
-        winner: room.winner,
-        voteTimer: room.voteTimer,
-      });
+      broadcastRoomState(io, roomCode);
     });
 
     socket.on('cast-vote', ({ roomCode, theoryId }) => {
       const room = getRoom(roomCode);
-      const judgeId = room.players[room.judgeIndex]?.id;
-      if (socket.id !== judgeId) return;
+      if (room.phase !== 'voting') return;
+      if (room.votesByPlayer.has(socket.id)) return;
 
       const selected = room.theories.find((theory) => theory.id === theoryId);
       if (!selected) return;
 
-      room.winner = selected.author;
-      const player = room.players.find((entry) => entry.name === selected.author);
-      if (player) player.score += 1;
-      room.phase = 'results';
-      clearVoteTimer(room);
-
-      io.to(roomCode).emit('room-state', {
-        code: room.code,
-        players: room.players,
-        judgeIndex: room.judgeIndex,
-        round: room.round,
-        topic: room.topic,
-        theories: room.theories,
-        phase: room.phase,
-        winner: room.winner,
-        voteTimer: room.voteTimer,
-      });
+      const voterName = room.players.find((player) => player.id === socket.id)?.name || 'Guest';
+      selected.votes = (selected.votes || 0) + 1;
+      selected.voters = Array.from(new Set([...(selected.voters || []), voterName]));
+      room.votesByPlayer.set(socket.id, theoryId);
+      broadcastRoomState(io, roomCode);
     });
 
     socket.on('next-round', ({ roomCode }) => {
       const room = getRoom(roomCode);
-      const judgeId = room.players[room.judgeIndex]?.id;
-      if (socket.id !== judgeId) return;
+      const chooserId = room.players[room.chooserIndex]?.id;
+      if (socket.id !== chooserId) return;
 
-      room.judgeIndex = (room.judgeIndex + 1) % Math.max(room.players.length, 1);
+      room.chooserIndex = (room.chooserIndex + 1) % Math.max(room.players.length, 1);
       room.round += 1;
       room.phase = 'topic';
       room.topic = '';
       room.theories = [];
       room.winner = null;
       room.voteTimer = 20;
+      room.votesByPlayer = new Map();
+      room.submittedBy = [];
       clearVoteTimer(room);
-
-      io.to(roomCode).emit('room-state', {
-        code: room.code,
-        players: room.players,
-        judgeIndex: room.judgeIndex,
-        round: room.round,
-        topic: room.topic,
-        theories: room.theories,
-        phase: room.phase,
-        winner: room.winner,
-        voteTimer: room.voteTimer,
-      });
+      broadcastRoomState(io, roomCode);
     });
 
     socket.on('disconnect', () => {
@@ -294,17 +297,10 @@ app.prepare().then(() => {
       if (room.players.length === 0) {
         rooms.delete(roomCode);
       } else {
-        io.to(roomCode).emit('room-state', {
-          code: room.code,
-          players: room.players,
-          judgeIndex: room.judgeIndex,
-          round: room.round,
-          topic: room.topic,
-          theories: room.theories,
-          phase: room.phase,
-          winner: room.winner,
-          voteTimer: room.voteTimer,
-        });
+        if (room.chooserIndex >= room.players.length) {
+          room.chooserIndex = 0;
+        }
+        broadcastRoomState(io, roomCode);
       }
     });
   });
