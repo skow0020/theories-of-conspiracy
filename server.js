@@ -148,11 +148,17 @@ app.prepare().then(() => {
 
   io.on('connection', (socket) => {
     socket.on('create-room', ({ nickname }, callback) => {
+      const safeName = String(nickname || '').trim();
+      if (!safeName || safeName.toLowerCase() === 'you') {
+        if (typeof callback === 'function') callback({ error: 'Alias is required and cannot be "You".' });
+        return;
+      }
+
       const code = normalizeRoomCode(generateRoomCode());
       const room = getRoom(code);
       const player = {
         id: socket.id,
-        name: nickname?.trim() || 'Guest',
+        name: safeName,
         score: 0,
         badge: '🕵️',
       };
@@ -179,6 +185,12 @@ app.prepare().then(() => {
     });
 
     socket.on('join-room', ({ roomCode, nickname }, callback) => {
+      const safeName = String(nickname || '').trim();
+      if (!safeName || safeName.toLowerCase() === 'you') {
+        if (typeof callback === 'function') callback({ error: 'Alias is required and cannot be "You".' });
+        return;
+      }
+
       const code = normalizeRoomCode(roomCode);
       if (!code) return;
 
@@ -195,7 +207,7 @@ app.prepare().then(() => {
       if (!alreadyInRoom) {
         room.players.push({
           id: socket.id,
-          name: nickname?.trim() || 'Guest',
+          name: safeName,
           score: 0,
           badge: '🕵️',
         });

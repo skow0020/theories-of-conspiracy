@@ -54,6 +54,13 @@ const normalizeRoomCode = (value: string) => {
   return `CON-${compact}`;
 };
 
+const validateAlias = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return "Alias is required.";
+  if (trimmed.toLowerCase() === "you") return "Alias cannot be 'You'.";
+  return "";
+};
+
 const generateRoomCode = () => {
   const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
   const digits = "23456789";
@@ -78,9 +85,10 @@ export default function Home() {
   const socketRef = useRef<Socket | null>(null);
   const phaseRef = useRef<Phase>("home");
   const roomCodeRef = useRef("");
+  const nicknameRef = useRef("");
   const [phase, setPhase] = useState<Phase>("home");
   const [roomCode, setRoomCode] = useState("");
-  const [nickname, setNickname] = useState("You");
+  const [nickname, setNickname] = useState("");
   const [customTopic, setCustomTopic] = useState("");
   const [players, setPlayers] = useState<Player[]>([]);
   const [chooserIndex, setChooserIndex] = useState(0);
@@ -97,7 +105,9 @@ export default function Home() {
   const [hasSubmittedTheory, setHasSubmittedTheory] = useState(false);
   const [hasVotedThisRound, setHasVotedThisRound] = useState(false);
   const [joinError, setJoinError] = useState("");
+  const [aliasError, setAliasError] = useState("");
   const [shuffledSuggestions] = useState<string[]>(() => shuffleTopics());
+  const previousPlayerCountRef = useRef(0);
 
   useEffect(() => {
     phaseRef.current = phase;
@@ -106,6 +116,10 @@ export default function Home() {
   useEffect(() => {
     roomCodeRef.current = roomCode;
   }, [roomCode]);
+
+  useEffect(() => {
+    nicknameRef.current = nickname;
+  }, [nickname]);
 
   useEffect(() => {
     const socketUrl =
@@ -135,6 +149,29 @@ export default function Home() {
     });
 
     socket.on("room-state", (state: RoomState) => {
+      const nextPlayerCount = state.players?.length ?? 0;
+      if (previousPlayerCountRef.current > 0 && nextPlayerCount > previousPlayerCountRef.current) {
+        try {
+          const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+          if (AudioCtx) {
+            const audioContext = new AudioCtx();
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            oscillator.type = "sine";
+            oscillator.frequency.value = 660;
+            gainNode.gain.value = 0.07;
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            oscillator.start();
+            oscillator.stop(audioContext.currentTime + 0.12);
+            void audioContext.close();
+          }
+        } catch {
+          // Ignore browser audio issues.
+        }
+      }
+      previousPlayerCountRef.current = nextPlayerCount;
+
       setRoomCode((previousCode) => state.code || previousCode || "");
       setPlayers(state.players || []);
       setChooserIndex(state.chooserIndex || 0);
@@ -146,7 +183,7 @@ export default function Home() {
       setIsTie(Boolean(state.isTie));
       setVoteTimer(state.voteTimer ?? 20);
 
-      const currentName = state.players.find((player) => player.id === socket.id)?.name || nickname;
+      const currentName = state.players.find((player) => player.id === socket.id)?.name || nicknameRef.current;
       setHasSubmittedTheory((state.theories || []).some((theory) => theory.authorId === socket.id));
       setHasVotedThisRound((state.theories || []).some((theory) => Array.isArray(theory.voters) && theory.voters.includes(currentName)));
     });
@@ -172,9 +209,25 @@ export default function Home() {
 
   const createRoom = () => {
     const socket = socketRef.current;
-    if (!socket || !isConnected) return;
+    const aliasErrorText = validateAlias(nickname);
 
-    socket.emit("create-room", { nickname: nickname.trim() || "Guest" }, (response: RoomState) => {
+    if (!socket || !isConnected) return;
+    if (aliasErrorText) {
+      setAliasError(aliasErrorText);
+      setJoinError("");
+      return;
+    }
+
+    setAliasError("");
+
+    socket.emit("create-room", { nickname: nickname.trim() }, (response: RoomState & { error?: string }) => {
+      if (response?.error) {
+        setJoinError(response.error);
+        setPhase("home");
+        setRoomCode("");
+        return;
+      }
+
       setRoomCode(response.code || generateRoomCode());
       setPlayers(response.players || []);
       setChooserIndex(response.chooserIndex || 0);
@@ -194,9 +247,18 @@ export default function Home() {
   const joinRoom = () => {
     const socket = socketRef.current;
     const normalizedRoomCode = normalizeRoomCode(roomCode);
-    if (!socket || !isConnected || !normalizedRoomCode) return;
+    const aliasErrorText = validateAlias(nickname);
 
-    socket.emit("join-room", { roomCode: normalizedRoomCode, nickname: nickname.trim() || "Guest" }, (response: RoomState & { error?: string }) => {
+    if (!socket || !isConnected || !normalizedRoomCode) return;
+    if (aliasErrorText) {
+      setAliasError(aliasErrorText);
+      setJoinError("");
+      return;
+    }
+
+    setAliasError("");
+
+    socket.emit("join-room", { roomCode: normalizedRoomCode, nickname: nickname.trim() }, (response: RoomState & { error?: string }) => {
       if (response?.error) {
         setJoinError(response.error);
         setPhase("home");
@@ -292,10 +354,16 @@ export default function Home() {
               </label>
               <input
                 value={nickname}
-                onChange={(event) => setNickname(event.target.value)}
+                onChange={(event) => {
+                  setNickname(event.target.value);
+                  if (aliasError) setAliasError("");
+                }}
                 className="w-full rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-base text-white outline-none ring-0 placeholder:text-slate-500 focus:border-cyan-400"
-                placeholder="You"
+                placeholder="Choose an alias"
               />
+              {aliasError && (
+                <p className="mt-2 text-sm text-rose-200">{aliasError}</p>
+              )}
             </div>
 
             <div className="mt-8 grid gap-3">
@@ -554,6 +622,14 @@ export default function Home() {
               </div>
             </div>
 
+            <button
+              disabled={!isTopicChooser}
+              onClick={nextRound}
+              className="w-full rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 px-4 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isTopicChooser ? (round >= 10 ? "Finish game" : "Next round") : "Waiting for topic chooser"}
+            </button>
+
             <div className="rounded-2xl border border-white/10 bg-slate-950/30 p-4">
               <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Vote breakdown</p>
               <div className="mt-3 space-y-3">
@@ -608,13 +684,6 @@ export default function Home() {
               </div>
             </div>
 
-            <button
-              disabled={!isTopicChooser}
-              onClick={nextRound}
-              className="w-full rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 px-4 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isTopicChooser ? (round >= 10 ? "Finish game" : "Next round") : "Waiting for topic chooser"}
-            </button>
           </section>
         )}
 
