@@ -31,7 +31,6 @@ type RoomState = {
   phase: Phase;
   winner: string | null;
   isTie?: boolean;
-  voteTimer: number;
 };
 
 const topicBank = [
@@ -99,7 +98,6 @@ export default function Home() {
   const [winner, setWinner] = useState<string | null>(null);
   const [isTie, setIsTie] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [voteTimer, setVoteTimer] = useState(20);
   const [isConnected, setIsConnected] = useState(false);
   const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(null);
   const [hasSubmittedTheory, setHasSubmittedTheory] = useState(false);
@@ -181,7 +179,6 @@ export default function Home() {
       setTheories(state.theories || []);
       setWinner(state.winner || null);
       setIsTie(Boolean(state.isTie));
-      setVoteTimer(state.voteTimer ?? 20);
 
       const currentName = state.players.find((player) => player.id === socket.id)?.name || nicknameRef.current;
       setHasSubmittedTheory((state.theories || []).some((theory) => theory.authorId === socket.id));
@@ -237,7 +234,6 @@ export default function Home() {
       setTheories(response.theories || []);
       setWinner(response.winner || null);
       setIsTie(Boolean(response.isTie));
-      setVoteTimer(response.voteTimer ?? 20);
       setSubmittedText("");
       setHasSubmittedTheory(false);
       setHasVotedThisRound(false);
@@ -275,7 +271,6 @@ export default function Home() {
       setTopic(response.topic || "");
       setTheories(response.theories || []);
       setWinner(response.winner || null);
-      setVoteTimer(response.voteTimer ?? 20);
       setSubmittedText("");
       setHasSubmittedTheory(false);
       setHasVotedThisRound(false);
@@ -316,6 +311,10 @@ export default function Home() {
   const castVote = (selectedId: string) => {
     const socket = socketRef.current;
     if (!socket || !roomCode || hasVotedThisRound) return;
+
+    const selectedTheory = theories.find((theory) => theory.id === selectedId);
+    if (!selectedTheory || selectedTheory.authorId === currentPlayerId) return;
+
     setHasVotedThisRound(true);
     socket.emit("cast-vote", { roomCode, theoryId: selectedId });
   };
@@ -569,14 +568,9 @@ export default function Home() {
 
         {phase === "voting" && (
           <section className="space-y-4 rounded-[28px] border border-white/10 bg-white/5 p-4 backdrop-blur-xl">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-cyan-300">Round voting</p>
-                <h2 className="mt-1 text-xl font-black">Choose the wildest theory</h2>
-              </div>
-              <div className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-xs font-bold text-cyan-100">
-                {voteTimer}s
-              </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.18em] text-cyan-300">Round voting</p>
+              <h2 className="mt-1 text-xl font-black">Choose the wildest theory</h2>
             </div>
 
             <div className="rounded-2xl border border-dashed border-cyan-400/35 bg-cyan-500/5 p-3">
@@ -584,31 +578,28 @@ export default function Home() {
               <p className="mt-2 text-base font-bold text-white">{topic}</p>
             </div>
 
-            <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-cyan-400 via-blue-500 to-fuchsia-500 transition-all duration-1000"
-                style={{ width: `${Math.max((voteTimer / 20) * 100, 0)}%` }}
-              />
-            </div>
-
             <div className="space-y-3">
-              {theories.map((theory, index) => (
-                <button
-                  key={theory.id}
-                  onClick={() => castVote(theory.id)}
-                  disabled={hasVotedThisRound}
-                  className="w-full rounded-2xl border border-white/10 bg-slate-950/30 p-4 text-left transition hover:border-cyan-400/40 hover:bg-cyan-500/5 disabled:cursor-not-allowed disabled:opacity-80"
-                >
-                  <div className="mb-2 flex items-center justify-between">
-                    <span className="font-bold text-white">Theory {index + 1}</span>
-                    <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400">{theory.votes ?? 0} votes</span>
-                  </div>
-                  <p className="text-sm leading-6 text-slate-200">{theory.text}</p>
-                  <p className="mt-2 text-[10px] uppercase tracking-[0.18em] text-cyan-200">
-                    {hasVotedThisRound ? "Vote locked in" : "Tap to vote"}
-                  </p>
-                </button>
-              ))}
+              {theories.map((theory, index) => {
+                const isOwnTheory = theory.authorId === currentPlayerId;
+
+                return (
+                  <button
+                    key={theory.id}
+                    onClick={() => castVote(theory.id)}
+                    disabled={hasVotedThisRound || isOwnTheory}
+                    className="w-full rounded-2xl border border-white/10 bg-slate-950/30 p-4 text-left transition hover:border-cyan-400/40 hover:bg-cyan-500/5 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <div className="mb-2 flex items-center justify-between">
+                      <span className="font-bold text-white">Theory {index + 1}</span>
+                      <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400">{theory.votes ?? 0} votes</span>
+                    </div>
+                    <p className="text-sm leading-6 text-slate-200">{theory.text}</p>
+                    <p className="mt-2 text-[10px] uppercase tracking-[0.18em] text-cyan-200">
+                      {isOwnTheory ? "Your theory" : hasVotedThisRound ? "Vote locked in" : "Tap to vote"}
+                    </p>
+                  </button>
+                );
+              })}
             </div>
           </section>
         )}

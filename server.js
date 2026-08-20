@@ -29,14 +29,6 @@ function generateRoomCode() {
   return `CON-${chars.join('')}`;
 }
 
-function clearVoteTimer(room) {
-  if (!room) return;
-  if (room.voteTimerInterval) {
-    clearInterval(room.voteTimerInterval);
-    room.voteTimerInterval = null;
-  }
-}
-
 function getRoomWinner(room) {
   if (!room.theories.length) return null;
 
@@ -64,16 +56,12 @@ function broadcastRoomState(io, roomCode) {
     phase: room.phase,
     winner: room.winner,
     isTie: Boolean(room.isTie),
-    voteTimer: room.voteTimer,
   });
 }
 
 function finalizeRound(io, roomCode) {
   const room = rooms.get(roomCode);
   if (!room) return;
-
-  clearVoteTimer(room);
-  room.voteTimer = 0;
 
   const winnerState = getRoomWinner(room);
   room.phase = 'results';
@@ -88,29 +76,6 @@ function finalizeRound(io, roomCode) {
   broadcastRoomState(io, roomCode);
 }
 
-function startVoteTimer(io, roomCode) {
-  const room = rooms.get(roomCode);
-  if (!room) return;
-
-  clearVoteTimer(room);
-
-  room.voteTimerInterval = setInterval(() => {
-    const currentRoom = rooms.get(roomCode);
-    if (!currentRoom || currentRoom.phase !== 'voting') {
-      clearVoteTimer(currentRoom);
-      return;
-    }
-
-    currentRoom.voteTimer -= 1;
-    if (currentRoom.voteTimer <= 0) {
-      finalizeRound(io, roomCode);
-      return;
-    }
-
-    broadcastRoomState(io, roomCode);
-  }, 1000);
-}
-
 function createRoomData(code) {
   return {
     code,
@@ -122,8 +87,6 @@ function createRoomData(code) {
     phase: 'lobby',
     winner: null,
     isTie: false,
-    voteTimer: 20,
-    voteTimerInterval: null,
     votesByPlayer: new Map(),
     submittedBy: [],
   };
@@ -177,7 +140,6 @@ app.prepare().then(() => {
         phase: room.phase,
         winner: room.winner,
         isTie: Boolean(room.isTie),
-        voteTimer: room.voteTimer,
       };
 
       if (typeof callback === 'function') callback(payload);
@@ -226,7 +188,6 @@ app.prepare().then(() => {
         phase: room.phase,
         winner: room.winner,
         isTie: Boolean(room.isTie),
-        voteTimer: room.voteTimer,
       };
 
       if (typeof callback === 'function') callback(payload);
@@ -247,8 +208,6 @@ app.prepare().then(() => {
       room.topic = '';
       room.votesByPlayer = new Map();
       room.submittedBy = [];
-      room.voteTimer = 20;
-      clearVoteTimer(room);
       broadcastRoomState(io, roomCode);
     });
 
@@ -263,7 +222,6 @@ app.prepare().then(() => {
       room.isTie = false;
       room.votesByPlayer = new Map();
       room.submittedBy = [];
-      room.voteTimer = 20;
       broadcastRoomState(io, roomCode);
     });
 
@@ -287,9 +245,7 @@ app.prepare().then(() => {
 
       if (room.theories.length >= room.players.length) {
         room.phase = 'voting';
-        room.voteTimer = 20;
         room.votesByPlayer = new Map();
-        startVoteTimer(io, room.code);
       }
 
       broadcastRoomState(io, roomCode);
@@ -303,6 +259,7 @@ app.prepare().then(() => {
 
       const selected = room.theories.find((theory) => theory.id === theoryId);
       if (!selected) return;
+      if (selected.authorId === socket.id) return;
 
       const voterName = room.players.find((player) => player.id === socket.id)?.name || 'Guest';
       selected.votes = (selected.votes || 0) + 1;
@@ -329,10 +286,8 @@ app.prepare().then(() => {
         room.theories = [];
         room.winner = null;
         room.isTie = false;
-        room.voteTimer = 0;
         room.votesByPlayer = new Map();
         room.submittedBy = [];
-        clearVoteTimer(room);
         broadcastRoomState(io, roomCode);
         return;
       }
@@ -344,10 +299,8 @@ app.prepare().then(() => {
       room.theories = [];
       room.winner = null;
       room.isTie = false;
-      room.voteTimer = 20;
       room.votesByPlayer = new Map();
       room.submittedBy = [];
-      clearVoteTimer(room);
       broadcastRoomState(io, roomCode);
     });
 
