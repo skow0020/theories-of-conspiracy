@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 
-type Phase = "home" | "lobby" | "topic" | "writing" | "voting" | "results";
+type Phase = "home" | "lobby" | "topic" | "writing" | "voting" | "results" | "game-over";
 
 type Player = {
   id: string;
@@ -17,18 +17,20 @@ type TheoryCard = {
   author: string;
   authorId?: string;
   text: string;
+  votes?: number;
+  voters?: string[];
 };
 
 type RoomState = {
   code: string;
   players: Player[];
-  judgeIndex: number;
+  chooserIndex: number;
   round: number;
   topic: string;
   theories: TheoryCard[];
   phase: Phase;
   winner: string | null;
-  voteTimer: number;
+  isTie?: boolean;
 };
 
 const topicBank = [
@@ -43,6 +45,20 @@ const topicBank = [
   "The giant billboard on the highway is a subliminal scoreboard used by the moon cult",
   "The city fountain only starts working when the mayor tells a lie at dinner",
 ];
+
+const normalizeRoomCode = (value: string) => {
+  const normalized = value.toUpperCase().replace(/[^A-Z0-9]/g, "").trim();
+  if (!normalized) return "";
+  const compact = normalized.replace(/^CON/, "").slice(0, 6);
+  return `CON-${compact}`;
+};
+
+const validateAlias = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed) return "Alias is required.";
+  if (trimmed.toLowerCase() === "you") return "Alias cannot be 'You'.";
+  return "";
+};
 
 const generateRoomCode = () => {
   const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -66,23 +82,42 @@ const shuffleTopics = () => {
 
 export default function Home() {
   const socketRef = useRef<Socket | null>(null);
+  const phaseRef = useRef<Phase>("home");
+  const roomCodeRef = useRef("");
+  const nicknameRef = useRef("");
   const [phase, setPhase] = useState<Phase>("home");
   const [roomCode, setRoomCode] = useState("");
-  const [nickname, setNickname] = useState("You");
+  const [nickname, setNickname] = useState("");
   const [customTopic, setCustomTopic] = useState("");
   const [players, setPlayers] = useState<Player[]>([]);
-  const [judgeIndex, setJudgeIndex] = useState(0);
+  const [chooserIndex, setChooserIndex] = useState(0);
   const [round, setRound] = useState(1);
   const [topic, setTopic] = useState("");
   const [theories, setTheories] = useState<TheoryCard[]>([]);
   const [submittedText, setSubmittedText] = useState("");
   const [winner, setWinner] = useState<string | null>(null);
+  const [isTie, setIsTie] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [voteTimer, setVoteTimer] = useState(20);
   const [isConnected, setIsConnected] = useState(false);
   const [currentPlayerId, setCurrentPlayerId] = useState<string | null>(null);
-  const [isSubmittingTheory, setIsSubmittingTheory] = useState(false);
+  const [hasSubmittedTheory, setHasSubmittedTheory] = useState(false);
+  const [hasVotedThisRound, setHasVotedThisRound] = useState(false);
+  const [joinError, setJoinError] = useState("");
+  const [aliasError, setAliasError] = useState("");
   const [shuffledSuggestions] = useState<string[]>(() => shuffleTopics());
+  const previousPlayerCountRef = useRef(0);
+
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
+  useEffect(() => {
+    roomCodeRef.current = roomCode;
+  }, [roomCode]);
+
+  useEffect(() => {
+    nicknameRef.current = nickname;
+  }, [nickname]);
 
   useEffect(() => {
     const socketUrl =
@@ -110,62 +145,135 @@ export default function Home() {
       setIsConnected(false);
       setCurrentPlayerId(null);
     });
+
     socket.on("room-state", (state: RoomState) => {
+      const nextPlayerCount = state.players?.length ?? 0;
+      if (previousPlayerCountRef.current > 0 && nextPlayerCount > previousPlayerCountRef.current) {
+        try {
+          const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+          if (AudioCtx) {
+            const audioContext = new AudioCtx();
+            const oscillator = audioContext.createOscillator();
+            const gainNode = audioContext.createGain();
+            oscillator.type = "sine";
+            oscillator.frequency.value = 660;
+            gainNode.gain.value = 0.07;
+            oscillator.connect(gainNode);
+            gainNode.connect(audioContext.destination);
+            oscillator.start();
+            oscillator.stop(audioContext.currentTime + 0.12);
+            void audioContext.close();
+          }
+        } catch {
+          // Ignore browser audio issues.
+        }
+      }
+      previousPlayerCountRef.current = nextPlayerCount;
+
       setRoomCode((previousCode) => state.code || previousCode || "");
       setPlayers(state.players || []);
-      setJudgeIndex(state.judgeIndex || 0);
+      setChooserIndex(state.chooserIndex || 0);
       setRound(state.round || 1);
       setPhase(state.phase || "lobby");
       setTopic(state.topic || "");
       setTheories(state.theories || []);
       setWinner(state.winner || null);
-      setVoteTimer(state.voteTimer ?? 20);
-      setIsSubmittingTheory(false);
+      setIsTie(Boolean(state.isTie));
+
+      const currentName = state.players.find((player) => player.id === socket.id)?.name || nicknameRef.current;
+      setHasSubmittedTheory((state.theories || []).some((theory) => theory.authorId === socket.id));
+      setHasVotedThisRound((state.theories || []).some((theory) => Array.isArray(theory.voters) && theory.voters.includes(currentName)));
     });
 
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (phaseRef.current !== "home" && roomCodeRef.current) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
     return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
       socket.disconnect();
     };
   }, []);
 
-  const activeJudge = players[judgeIndex % Math.max(players.length, 1)] ?? null;
-  const isJudge = Boolean(activeJudge && currentPlayerId && activeJudge.id === currentPlayerId);
-  const hasSubmittedTheory = theories.some((theory) => theory.authorId === currentPlayerId) || isSubmittingTheory;
+  const activeChooser = players[chooserIndex % Math.max(players.length, 1)] ?? null;
+  const isTopicChooser = Boolean(activeChooser && currentPlayerId && activeChooser.id === currentPlayerId);
   const lobbyStatusText = isConnected ? "Online" : "Connecting...";
 
   const createRoom = () => {
     const socket = socketRef.current;
-    if (!socket || !isConnected) return;
+    const aliasErrorText = validateAlias(nickname);
 
-    socket.emit("create-room", { nickname: nickname.trim() || "Guest" }, (response: RoomState) => {
+    if (!socket || !isConnected) return;
+    if (aliasErrorText) {
+      setAliasError(aliasErrorText);
+      setJoinError("");
+      return;
+    }
+
+    setAliasError("");
+
+    socket.emit("create-room", { nickname: nickname.trim() }, (response: RoomState & { error?: string }) => {
+      if (response?.error) {
+        setJoinError(response.error);
+        setPhase("home");
+        setRoomCode("");
+        return;
+      }
+
       setRoomCode(response.code || generateRoomCode());
       setPlayers(response.players || []);
-      setJudgeIndex(response.judgeIndex || 0);
+      setChooserIndex(response.chooserIndex || 0);
       setRound(response.round || 1);
       setPhase(response.phase || "lobby");
       setTopic(response.topic || "");
       setTheories(response.theories || []);
       setWinner(response.winner || null);
-      setVoteTimer(response.voteTimer ?? 20);
+      setIsTie(Boolean(response.isTie));
       setSubmittedText("");
+      setHasSubmittedTheory(false);
+      setHasVotedThisRound(false);
     });
   };
 
   const joinRoom = () => {
     const socket = socketRef.current;
-    if (!socket || !isConnected || !roomCode.trim()) return;
+    const normalizedRoomCode = normalizeRoomCode(roomCode);
+    const aliasErrorText = validateAlias(nickname);
 
-    socket.emit("join-room", { roomCode: roomCode.trim(), nickname: nickname.trim() || "Guest" }, (response: RoomState) => {
-      setRoomCode(response.code || roomCode);
+    if (!socket || !isConnected || !normalizedRoomCode) return;
+    if (aliasErrorText) {
+      setAliasError(aliasErrorText);
+      setJoinError("");
+      return;
+    }
+
+    setAliasError("");
+
+    socket.emit("join-room", { roomCode: normalizedRoomCode, nickname: nickname.trim() }, (response: RoomState & { error?: string }) => {
+      if (response?.error) {
+        setJoinError(response.error);
+        setPhase("home");
+        setRoomCode("");
+        return;
+      }
+
+      setJoinError("");
+      setRoomCode(response.code || normalizedRoomCode);
       setPlayers(response.players || []);
-      setJudgeIndex(response.judgeIndex || 0);
+      setChooserIndex(response.chooserIndex || 0);
       setRound(response.round || 1);
       setPhase(response.phase || "lobby");
       setTopic(response.topic || "");
       setTheories(response.theories || []);
       setWinner(response.winner || null);
-      setVoteTimer(response.voteTimer ?? 20);
       setSubmittedText("");
+      setHasSubmittedTheory(false);
+      setHasVotedThisRound(false);
     });
   };
 
@@ -181,17 +289,17 @@ export default function Home() {
 
   const pickTopic = (value: string) => {
     const socket = socketRef.current;
-    if (!socket || !isJudge) return;
+    if (!socket || !isTopicChooser) return;
     socket.emit("set-topic", { roomCode, topic: value });
     setCustomTopic("");
   };
 
   const submitTheory = () => {
     const socket = socketRef.current;
-    if (!socket || !roomCode || isJudge || hasSubmittedTheory) return;
+    if (!socket || !roomCode || hasSubmittedTheory) return;
 
     const finalText = submittedText.trim() || `The ${topic.toLowerCase()} scandal is being covered up by a moonlit committee of pigeons.`;
-    setIsSubmittingTheory(true);
+    setHasSubmittedTheory(true);
     socket.emit("submit-theory", {
       roomCode,
       theoryText: finalText,
@@ -202,19 +310,33 @@ export default function Home() {
 
   const castVote = (selectedId: string) => {
     const socket = socketRef.current;
-    if (!socket || !roomCode) return;
+    if (!socket || !roomCode || hasVotedThisRound) return;
+
+    const selectedTheory = theories.find((theory) => theory.id === selectedId);
+    if (!selectedTheory || selectedTheory.authorId === currentPlayerId) return;
+
+    setHasVotedThisRound(true);
     socket.emit("cast-vote", { roomCode, theoryId: selectedId });
   };
 
   const nextRound = () => {
     const socket = socketRef.current;
-    if (!socket || !roomCode || !isJudge) return;
+    if (!socket || !roomCode || !isTopicChooser) return;
     socket.emit("next-round", { roomCode });
   };
 
   return (
     <main className="min-h-screen bg-[#0f1021] px-4 py-6 text-white">
       <div className="mx-auto max-w-md">
+        {phase !== "home" && phase !== "lobby" && (
+          <div className="mb-4 rounded-[28px] border border-cyan-400/20 bg-slate-900/70 p-4 shadow-xl shadow-cyan-500/10">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-xs uppercase tracking-[0.2em] text-cyan-300">Room code</span>
+              <span className="rounded-full border border-cyan-400/40 bg-cyan-500/10 px-2 py-1 text-sm font-bold text-cyan-100">{roomCode}</span>
+            </div>
+          </div>
+        )}
+
         {phase === "home" && (
           <section className="rounded-[28px] border border-white/10 bg-white/5 p-6 shadow-2xl shadow-cyan-500/10 backdrop-blur-xl">
             <div className="mb-6 inline-flex rounded-full border border-cyan-400/40 bg-cyan-500/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-200">
@@ -222,7 +344,7 @@ export default function Home() {
             </div>
             <h1 className="text-4xl font-black tracking-tight text-white">Theories of Conspiracy</h1>
             <p className="mt-3 text-sm text-slate-300">
-              Gather a crew, invent a ridiculous cover-up, and let one player decide which story is the most deliciously fake.
+              Gather a crew, pick a chaotic topic, and see who can invent the wildest conspiracy the group believes in most.
             </p>
 
             <div className="mt-6 space-y-3">
@@ -231,10 +353,16 @@ export default function Home() {
               </label>
               <input
                 value={nickname}
-                onChange={(event) => setNickname(event.target.value)}
+                onChange={(event) => {
+                  setNickname(event.target.value);
+                  if (aliasError) setAliasError("");
+                }}
                 className="w-full rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-base text-white outline-none ring-0 placeholder:text-slate-500 focus:border-cyan-400"
-                placeholder="You"
+                placeholder="Choose an alias"
               />
+              {aliasError && (
+                <p className="mt-2 text-sm text-rose-200">{aliasError}</p>
+              )}
             </div>
 
             <div className="mt-8 grid gap-3">
@@ -243,12 +371,15 @@ export default function Home() {
                 onClick={createRoom}
                 className="rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 px-4 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isConnected ? "Create room" : "Connecting..."}
+                {isConnected ? "New room" : "Connecting..."}
               </button>
               <div className="grid grid-cols-[1fr_auto] gap-2">
                 <input
                   value={roomCode}
-                  onChange={(event) => setRoomCode(event.target.value.toUpperCase())}
+                  onChange={(event) => {
+                    setRoomCode(normalizeRoomCode(event.target.value));
+                    if (joinError) setJoinError("");
+                  }}
                   className="rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-center text-sm font-semibold tracking-[0.18em] text-cyan-100 uppercase outline-none focus:border-cyan-400"
                   placeholder="Code"
                 />
@@ -257,9 +388,14 @@ export default function Home() {
                   onClick={joinRoom}
                   className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Join
+                  Join room
                 </button>
               </div>
+              {joinError && (
+                <div className="mt-3 rounded-2xl border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-100">
+                  {joinError}
+                </div>
+              )}
             </div>
 
             <div className="mt-5 flex items-center justify-between rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-3 text-xs text-emerald-100">
@@ -289,7 +425,7 @@ export default function Home() {
             <div className="rounded-[28px] border border-white/10 bg-white/5 p-4 backdrop-blur-xl">
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-lg font-bold">Players</h2>
-                <span className="text-xs text-slate-400">{players.length}/8</span>
+                <span className="text-xs text-slate-400">{players.length}</span>
               </div>
               <div className="space-y-2">
                 {players.map((player) => (
@@ -307,26 +443,26 @@ export default function Home() {
               </div>
 
               <button
-                disabled={!isJudge}
+                disabled={!isTopicChooser || players.length < 2}
                 onClick={() => {
                   const socket = socketRef.current;
-                  if (socket && roomCode && isJudge) socket.emit("start-round", { roomCode });
+                  if (socket && roomCode && isTopicChooser && players.length >= 2) socket.emit("start-round", { roomCode });
                 }}
                 className="mt-5 w-full rounded-2xl bg-gradient-to-r from-fuchsia-500 to-purple-500 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-fuchsia-500/30 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {isJudge ? `Start round ${round}` : "Waiting for judge"}
+                {players.length < 2 ? "Need at least 2 players" : isTopicChooser ? `Start round ${round}` : "Waiting for topic chooser"}
               </button>
             </div>
           </section>
         )}
 
         {phase === "topic" && (
-          isJudge ? (
+          isTopicChooser ? (
             <section className="space-y-4 rounded-[28px] border border-white/10 bg-white/5 p-4 backdrop-blur-xl">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-xs uppercase tracking-[0.2em] text-cyan-300">Round {round}</p>
-                  <h2 className="mt-1 text-2xl font-black">Judge: {activeJudge?.name || "—"}</h2>
+                  <h2 className="mt-1 text-2xl font-black">Topic chooser: {activeChooser?.name || "—"}</h2>
                 </div>
                 <span className="rounded-full border border-cyan-400/40 bg-cyan-500/10 px-2 py-1 text-xs font-semibold text-cyan-100">{roomCode}</span>
               </div>
@@ -337,8 +473,8 @@ export default function Home() {
               </div>
 
               <div className="rounded-2xl border border-cyan-400/25 bg-cyan-500/10 p-3">
-                <p className="text-[10px] uppercase tracking-[0.2em] text-cyan-200">Judge briefing</p>
-                <p className="mt-1 text-sm text-cyan-50">Pick the theory that is the most chaotic, specific, and impossible to believe.</p>
+                <p className="text-[10px] uppercase tracking-[0.2em] text-cyan-200">Round briefing</p>
+                <p className="mt-1 text-sm text-cyan-50">Pick a chaotic topic and let everyone invent a wild conspiracy theory.</p>
               </div>
 
               <div className="space-y-2">
@@ -375,75 +511,66 @@ export default function Home() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-xs uppercase tracking-[0.2em] text-cyan-300">Round {round}</p>
-                  <h2 className="mt-1 text-2xl font-black">Judge: {activeJudge?.name || "—"}</h2>
+                  <h2 className="mt-1 text-2xl font-black">Topic chooser: {activeChooser?.name || "—"}</h2>
                 </div>
                 <span className="rounded-full border border-cyan-400/40 bg-cyan-500/10 px-2 py-1 text-xs font-semibold text-cyan-100">{roomCode}</span>
               </div>
               <div className="rounded-2xl border border-dashed border-cyan-400/35 bg-cyan-500/5 p-4 text-sm text-cyan-50">
-                The judge is picking the round topic. Sit tight and get ready to write your theory.
+                The topic chooser is picking a fresh conspiracy prompt. Get ready to write your wildest theory.
               </div>
             </section>
           )
         )}
 
         {phase === "writing" && (
-          isJudge ? (
-            <section className="space-y-4 rounded-[28px] border border-white/10 bg-white/5 p-4 backdrop-blur-xl">
-              <div className="rounded-2xl border border-fuchsia-400/30 bg-fuchsia-500/10 p-3">
-                <p className="text-xs uppercase tracking-[0.18em] text-fuchsia-200">Current topic</p>
-                <p className="mt-2 text-lg font-bold text-white">{topic}</p>
-              </div>
-              <div className="rounded-2xl border border-dashed border-cyan-400/35 bg-cyan-500/5 p-4 text-sm text-cyan-50">
-                You are the judge this round. Wait for the other players to submit their theories before voting.
-              </div>
-            </section>
-          ) : (
-            <section className="space-y-4 rounded-[28px] border border-white/10 bg-white/5 p-4 backdrop-blur-xl">
-              <div className="rounded-2xl border border-fuchsia-400/30 bg-fuchsia-500/10 p-3">
-                <p className="text-xs uppercase tracking-[0.18em] text-fuchsia-200">Current topic</p>
-                <p className="mt-2 text-lg font-bold text-white">{topic}</p>
-              </div>
+          <section className="space-y-4 rounded-[28px] border border-white/10 bg-white/5 p-4 backdrop-blur-xl">
+            <div className="rounded-2xl border border-fuchsia-400/30 bg-fuchsia-500/10 p-3">
+              <p className="text-xs uppercase tracking-[0.18em] text-fuchsia-200">Current topic</p>
+              <p className="mt-2 text-lg font-bold text-white">{topic}</p>
+            </div>
 
-              <div className="space-y-2">
-                <label className="text-xs uppercase tracking-[0.18em] text-slate-400">Your conspiracy</label>
-                <textarea
-                  value={submittedText}
-                  onChange={(event) => setSubmittedText(event.target.value)}
-                  rows={5}
-                  className="w-full rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:border-fuchsia-400"
-                  placeholder="Write the most ridiculous conspiracy you can imagine..."
-                />
-              </div>
+            <div className="space-y-2">
+              <label className="text-xs uppercase tracking-[0.18em] text-slate-400">Your conspiracy</label>
+              <textarea
+                value={submittedText}
+                onChange={(event) => setSubmittedText(event.target.value)}
+                rows={5}
+                disabled={hasSubmittedTheory}
+                className="w-full rounded-2xl border border-white/10 bg-slate-950/40 px-4 py-3 text-sm text-white placeholder:text-slate-500 focus:border-fuchsia-400 disabled:cursor-not-allowed disabled:opacity-60"
+                placeholder={hasSubmittedTheory ? "Waiting for all submissions..." : "Write the most ridiculous conspiracy you can imagine..."}
+              />
+            </div>
 
-              <div className="grid gap-2">
-                <button
-                  disabled={hasSubmittedTheory}
-                  onClick={submitTheory}
-                  className="rounded-2xl bg-gradient-to-r from-fuchsia-500 to-pink-500 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-fuchsia-500/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {hasSubmittedTheory ? "Theory submitted" : "Submit theory"}
-                </button>
+            <div className="grid gap-2">
+              <button
+                disabled={hasSubmittedTheory}
+                onClick={submitTheory}
+                className="rounded-2xl bg-gradient-to-r from-fuchsia-500 to-pink-500 px-4 py-3 text-sm font-bold text-white shadow-lg shadow-fuchsia-500/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {hasSubmittedTheory ? "Theory submitted" : "Submit theory"}
+              </button>
+              {!hasSubmittedTheory && (
                 <button
                   onClick={() => setSubmittedText("The entire town is being run by a council of suspiciously organized squirrels who own the bakery.")}
                   className="rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm font-semibold text-white transition hover:bg-white/10"
                 >
                   Use a random absurd suggestion
                 </button>
-              </div>
-            </section>
-          )
+              )}
+              {hasSubmittedTheory && (
+                <div className="rounded-2xl border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+                  Waiting for all submissions before voting begins.
+                </div>
+              )}
+            </div>
+          </section>
         )}
 
         {phase === "voting" && (
           <section className="space-y-4 rounded-[28px] border border-white/10 bg-white/5 p-4 backdrop-blur-xl">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-cyan-300">Judge&apos;s choice</p>
-                <h2 className="mt-1 text-xl font-black">{activeJudge?.name || "Judge"} is deciding</h2>
-              </div>
-              <div className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-xs font-bold text-cyan-100">
-                {voteTimer}s
-              </div>
+            <div>
+              <p className="text-xs uppercase tracking-[0.18em] text-cyan-300">Round voting</p>
+              <h2 className="mt-1 text-xl font-black">Choose the wildest theory</h2>
             </div>
 
             <div className="rounded-2xl border border-dashed border-cyan-400/35 bg-cyan-500/5 p-3">
@@ -451,33 +578,28 @@ export default function Home() {
               <p className="mt-2 text-base font-bold text-white">{topic}</p>
             </div>
 
-            <div className="h-2 overflow-hidden rounded-full bg-slate-800">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-cyan-400 via-blue-500 to-fuchsia-500 transition-all duration-1000"
-                style={{ width: `${(voteTimer / 20) * 100}%` }}
-              />
-            </div>
-
             <div className="space-y-3">
-              {isJudge ? (
-                theories.map((theory, index) => (
+              {theories.map((theory, index) => {
+                const isOwnTheory = theory.authorId === currentPlayerId;
+
+                return (
                   <button
                     key={theory.id}
                     onClick={() => castVote(theory.id)}
-                    className="w-full rounded-2xl border border-white/10 bg-slate-950/30 p-4 text-left transition hover:border-cyan-400/40 hover:bg-cyan-500/5"
+                    disabled={hasVotedThisRound || isOwnTheory}
+                    className="w-full rounded-2xl border border-white/10 bg-slate-950/30 p-4 text-left transition hover:border-cyan-400/40 hover:bg-cyan-500/5 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <div className="mb-2 flex items-center justify-between">
                       <span className="font-bold text-white">Theory {index + 1}</span>
-                      <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400">vote</span>
+                      <span className="text-[10px] uppercase tracking-[0.2em] text-slate-400">{theory.votes ?? 0} votes</span>
                     </div>
                     <p className="text-sm leading-6 text-slate-200">{theory.text}</p>
+                    <p className="mt-2 text-[10px] uppercase tracking-[0.18em] text-cyan-200">
+                      {isOwnTheory ? "Your theory" : hasVotedThisRound ? "Vote locked in" : "Tap to vote"}
+                    </p>
                   </button>
-                ))
-              ) : (
-                <div className="rounded-2xl border border-dashed border-cyan-400/35 bg-cyan-500/5 p-4 text-sm text-cyan-50">
-                  The judge is deciding. Sit tight.
-                </div>
-              )}
+                );
+              })}
             </div>
           </section>
         )}
@@ -486,17 +608,54 @@ export default function Home() {
           <section className="space-y-4 rounded-[28px] border border-white/10 bg-white/5 p-4 backdrop-blur-xl">
             <div className="rounded-2xl bg-gradient-to-r from-amber-400 via-orange-500 to-pink-500 p-[1px]">
               <div className="rounded-2xl bg-slate-950/90 p-4">
-                <p className="text-xs uppercase tracking-[0.22em] text-amber-200">Winner</p>
+                <p className="text-xs uppercase tracking-[0.22em] text-amber-200">Round winner</p>
                 <h2 className="mt-2 text-3xl font-black text-white">{winner || "No winner"}</h2>
               </div>
             </div>
 
+            <button
+              disabled={!isTopicChooser}
+              onClick={nextRound}
+              className="w-full rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 px-4 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isTopicChooser ? (round >= 10 ? "Finish game" : "Next round") : "Waiting for topic chooser"}
+            </button>
+
             <div className="rounded-2xl border border-white/10 bg-slate-950/30 p-4">
-              <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Revealed author</p>
+              <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Vote breakdown</p>
+              <div className="mt-3 space-y-3">
+                {theories
+                  .slice()
+                  .sort((a, b) => (b.votes ?? 0) - (a.votes ?? 0))
+                  .map((theory) => (
+                    <div key={theory.id} className="rounded-xl border border-white/10 bg-white/5 p-3">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <span className="font-semibold text-white">{theory.author}</span>
+                        <span className="text-xs uppercase tracking-[0.18em] text-cyan-200">{theory.votes ?? 0} votes</span>
+                      </div>
+                      <p className="text-sm text-slate-200">{theory.text}</p>
+                      {Array.isArray(theory.voters) && theory.voters.length > 0 ? (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {theory.voters.map((voter) => (
+                            <span key={`${theory.id}-${voter}`} className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-[10px] uppercase tracking-[0.12em] text-cyan-100">
+                              {voter}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-[10px] uppercase tracking-[0.18em] text-slate-400">No votes</p>
+                      )}
+                    </div>
+                  ))}
+              </div>
+
+              <p className="mt-4 text-xs uppercase tracking-[0.18em] text-slate-400">Round summary</p>
               <div className="mt-3 rounded-xl bg-emerald-500/10 px-3 py-3 text-sm text-emerald-100">
-                {winner === "The room decided to keep the chaos alive"
-                  ? "The room was too chaotic to choose a winner, so everyone gets to keep their dignity."
-                  : winner ? `The winning theory was submitted by ${winner}.` : "Waiting for the judge to reveal the winner."}
+                {isTie
+                  ? "It’s a tie! No one gets a point."
+                  : winner
+                    ? `The theory from ${winner} takes the round and earns a point.`
+                    : "No theory received votes this round."}
               </div>
 
               <p className="mt-4 text-xs uppercase tracking-[0.18em] text-slate-400">Leaderboard</p>
@@ -516,13 +675,39 @@ export default function Home() {
               </div>
             </div>
 
-            <button
-              disabled={!isJudge}
-              onClick={nextRound}
-              className="w-full rounded-2xl bg-gradient-to-r from-cyan-400 to-blue-500 px-4 py-3 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {isJudge ? "Next round" : "Waiting for judge"}
-            </button>
+          </section>
+        )}
+
+        {phase === "game-over" && (
+          <section className="space-y-4 rounded-[28px] border border-white/10 bg-white/5 p-6 backdrop-blur-xl">
+            <div className="rounded-[28px] border border-amber-400/30 bg-amber-500/10 p-4 text-center">
+              <p className="text-xs uppercase tracking-[0.22em] text-amber-200">Final round</p>
+              <h2 className="mt-3 text-4xl font-black text-white">Quit milk mixin</h2>
+              <p className="mt-2 text-sm text-amber-100">go outside you filthy animals</p>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-slate-950/30 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Room code</p>
+              <div className="mt-2 flex items-center justify-center rounded-full border border-cyan-400/40 bg-cyan-500/10 px-3 py-2 text-sm font-bold text-cyan-100">{roomCode}</div>
+            </div>
+
+            <div className="rounded-2xl border border-white/10 bg-slate-950/30 p-4">
+              <p className="text-xs uppercase tracking-[0.18em] text-slate-400">Leaderboard</p>
+              <div className="mt-3 space-y-2">
+                {players
+                  .slice()
+                  .sort((a, b) => b.score - a.score)
+                  .map((player) => (
+                    <div key={player.id} className="flex items-center justify-between rounded-xl bg-white/5 px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <span>{player.badge}</span>
+                        <span className="font-medium text-white">{player.name}</span>
+                      </div>
+                      <span className="text-sm font-bold text-cyan-200">{player.score}</span>
+                    </div>
+                  ))}
+              </div>
+            </div>
           </section>
         )}
       </div>
