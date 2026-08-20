@@ -2,6 +2,7 @@
   "name": "theories-of-conspiracy",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "scripts": {
     "dev": "(command -v fuser >/dev/null 2>&1 && fuser -k 3000/tcp || command -v lsof >/dev/null 2>&1 && lsof -ti :3000 | xargs -r kill -9 || true) && node server.js",
     "build": "next build",
