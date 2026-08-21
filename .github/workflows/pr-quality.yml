@@ -27,7 +27,16 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
+      - name: Run Typecheck
+        run: npx tsc --noEmit
+
+      - name: Run unit & integration tests
+        run: npm run test:coverage
+
       - name: Run production build
         run: npm run build
+
+      - name: Run end-to-end tests
+        run: npm run test:e2e
 
 

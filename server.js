@@ -3,10 +3,9 @@ import next from 'next';
 import { Server } from 'socket.io';
 
 const dev = process.env.NODE_ENV !== 'production';
-const hostname = '0.0.0.0';
-const port = Number(process.env.PORT || 3000);
+const DEFAULT_HOSTNAME = '0.0.0.0';
 
-const app = next({ dev, hostname, port });
+const app = next({ dev });
 const handle = app.getRequestHandler();
 
 const rooms = new Map();
@@ -99,8 +98,9 @@ function getRoom(code) {
   }
   return rooms.get(normalized);
 }
+async function createServerInstance({ hostname = DEFAULT_HOSTNAME } = {}) {
+  await app.prepare();
 
-app.prepare().then(() => {
   const server = createServer((req, res) => handle(req, res));
   const io = new Server(server, {
     cors: {
@@ -322,7 +322,41 @@ app.prepare().then(() => {
     });
   });
 
-  server.listen(port, hostname, () => {
-    console.log(`> Ready on http://${hostname}:${port}`);
+  return {
+    app,
+    server,
+    io,
+    rooms,
+    listen: (listenPort, listenHost = hostname) => new Promise((resolve, reject) => {
+      const p = Number(listenPort || process.env.PORT || 0);
+      server.listen(p, listenHost, () => {
+        const address = server.address();
+        resolve(address);
+      }).once('error', reject);
+    }),
+    close: () => new Promise((resolve, reject) => server.close((err) => err ? reject(err) : resolve())),
+  };
+}
+
+// If run directly, start the server on the default port/hostname
+if (process.argv[1] && process.argv[1].endsWith('server.js')) {
+  createServerInstance().then(async (s) => {
+    const port = Number(process.env.PORT || 3000);
+    await s.listen(port, DEFAULT_HOSTNAME);
+    console.log(`> Ready on http://${DEFAULT_HOSTNAME}:${port}`);
+  }).catch((err) => {
+    console.error('Failed to start server', err);
+    process.exit(1);
   });
-});
+}
+
+export {
+  normalizeRoomCode,
+  generateRoomCode,
+  getRoomWinner,
+  broadcastRoomState,
+  finalizeRound,
+  createRoomData,
+  getRoom,
+  createServerInstance,
+};
