@@ -7,8 +7,13 @@
     "dev": "(command -v fuser >/dev/null 2>&1 && fuser -k 3000/tcp || command -v lsof >/dev/null 2>&1 && lsof -ti :3000 | xargs -r kill -9 || true) && node server.js",
     "build": "next build",
     "start": "NODE_ENV=production node server.js",
-    "lint": "eslint",
-    "serve:ngrok": "./start-public.sh"
+    "lint": "eslint . --ext .ts,.tsx,.js,.jsx",
+    "serve:ngrok": "./start-public.sh",
+    "test": "vitest",
+    "test:unit": "vitest",
+    "test:integration": "vitest --run --environment=node tests/integration",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "next": "16.3.0",
@@ -19,12 +24,20 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@testing-library/jest-dom": "^7",
+    "@testing-library/react": "^16",
+    "@testing-library/user-event": "^14",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitest/coverage-v8": "^4.1.11",
     "eslint": "^9",
     "eslint-config-next": "16.3.0",
+    "jsdom": "^22",
+    "@playwright/test": "^1.62.1",
+    "supertest": "^6",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^6",
+    "vitest": "^4.1.11"
   }
 }

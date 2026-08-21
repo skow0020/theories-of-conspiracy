@@ -90,6 +90,44 @@ The local dev server needs to allow the tunnel origin in development. The projec
 
 If ngrok changes its URL, you usually only need to reopen the tunnel and load the new public URL. No code change is needed unless you want to force a specific socket URL with an environment variable.
 
+## Deploying to Heroku
+
+This project bundles the Next.js frontend and the Socket.IO server into a single Node process (`server.js`) so it can be deployed as one Heroku web process.
+
+1. Create a Heroku app and push your code (CLI):
+
+```bash
+heroku login
+heroku create your-app-name
+git push heroku HEAD:main
+```
+
+2. Ensure the `Procfile` is present (this repo includes one) so Heroku runs the correct command:
+
+```
+web: node server.js
+```
+
+3. Set the client socket URL to point at the Heroku app (so browsers connect to the host running Socket.IO). Replace `your-app-name` with your actual app name:
+
+```bash
+heroku config:set NEXT_PUBLIC_SOCKET_URL=https://your-app-name.herokuapp.com
+```
+
+4. Scale a web dyno if necessary and follow logs:
+
+```bash
+heroku ps:scale web=1
+heroku logs --tail
+```
+
+Notes:
+- Use the HTTPS URL (`https://...`) — WebSocket handshakes work reliably over wss/https.
+- If you keep the frontend on Vercel, set the same `NEXT_PUBLIC_SOCKET_URL` in the Vercel project environment variables so the browser connects to the Heroku host instead of the Vercel host.
+- Heroku supports WebSockets. If you run multiple dynos, configure a Socket.IO adapter (Redis) so events propagate across instances.
+- For faster deployments or regional control consider Render, Fly, or Cloud Run (these services can run the same `server.js` process).
+
+
 ## Common workflow
 
 - Local play: http://localhost:3000

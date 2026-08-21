@@ -27,7 +27,17 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
-      - name: Run production build
-        run: npm run build
+      - name: Run Typecheck
+        run: npx tsc --noEmit
+
+      - name: Run unit & integration tests
+        run: npm run test:coverage
+
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
+
+      - name: Run end-to-end tests
+        run: npm run test:e2e
 
 
