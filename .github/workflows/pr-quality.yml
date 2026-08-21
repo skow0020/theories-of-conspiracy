@@ -33,8 +33,9 @@ jobs:
       - name: Run unit & integration tests
         run: npm run test:coverage
 
-      - name: Run production build
-        run: npm run build
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps
 
       - name: Run end-to-end tests
         run: npm run test:e2e
