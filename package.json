@@ -1,6 +1,9 @@
 {
   "name": "theories-of-conspiracy",
   "version": "0.1.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "private": true,
   "type": "module",
   "scripts": {
@@ -27,7 +30,7 @@
     "@testing-library/jest-dom": "^7",
     "@testing-library/react": "^16",
     "@testing-library/user-event": "^14",
-    "@types/node": "^20",
+    "@types/node": "^24",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitest/coverage-v8": "^4.1.11",
