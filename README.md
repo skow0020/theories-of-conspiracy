@@ -6,7 +6,7 @@ This app is built with Next.js, React, and Socket.IO for real-time multiplayer r
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 24+
 - npm
 - ngrok (optional, for testing from a phone or other device)
 
